@@ -1,0 +1,94 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'waseemkhanjdpr@gmail.com'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- User Profile Validation ---
+    function isValidUser(data) {
+      return data.uid == request.auth.uid 
+        && data.email is string && data.email.size() <= 200
+        && data.displayName is string && data.displayName.size() <= 100
+        && data.plan in ['free', 'pro', 'practitioner']
+        && data.aiUsageCount is int && data.aiUsageCount >= 0
+        && data.lastUsageReset is string;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if (isOwner(userId) || isAdmin()) && isValidUser(incoming()) 
+        && (isAdmin() || incoming().diff(existing()).affectedKeys().hasAny(['aiUsageCount', 'lastUsageReset', 'plan', 'businessName', 'businessGstin', 'displayName']));
+      // list not allowed for users
+    }
+
+    // --- Invoice Validation ---
+    function isValidInvoice(data) {
+      return data.userId == request.auth.uid
+        && data.invoiceNumber is string && data.invoiceNumber.size() <= 50
+        && data.businessName is string && data.businessName.size() <= 200
+        && data.clientName is string && data.clientName.size() <= 200
+        && data.date is string
+        && data.items is list && data.items.size() <= 50;
+    }
+
+    match /invoices/{invoiceId} {
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow get: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidInvoice(incoming());
+      allow update: if (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid)) && (isAdmin() || (incoming().userId == request.auth.uid && isValidInvoice(incoming())));
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    // --- AI Usage Logs Validation ---
+    function isValidAiLog(data) {
+      return data.userId == request.auth.uid
+        && data.tool is string && data.tool.size() <= 100
+        && data.prompt is string && data.prompt.size() <= 5000
+        && data.timestamp is string;
+    }
+
+    match /ai_usage_logs/{logId} {
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow get: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid && isValidAiLog(incoming());
+      // No updates or deletes for audit logs
+    }
+
+    // --- Connection Test ---
+    match /_connection_test_/{docId} {
+      allow read: if true;
+    }
+  }
+}

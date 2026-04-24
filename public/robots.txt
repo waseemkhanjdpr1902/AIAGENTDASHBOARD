@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /profile/
+Disallow: /dashboard/
+
+Sitemap: https://gst-ai-pro.india/sitemap.xml
